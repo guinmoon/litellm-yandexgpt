@@ -2,7 +2,8 @@
 
 ## Запуск
 ```BASH
-cd YANDEX_FOLDER_ID=<Ваш FolderID> python3 proxy_cli.py --config config.yml 
+cd litellm/litellm/proxy/ 
+YANDEX_FOLDER_ID=<Ваш FolderID> python3 proxy_cli.py --config config.yml 
 ```
 ## Содержимое конфига
 ```YAML
