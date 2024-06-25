@@ -97,6 +97,7 @@ from .llms import (
     vertex_ai_anthropic,
     vllm,
     watsonx,
+    yandex,
 )
 from .llms.anthropic import AnthropicChatCompletion
 from .llms.anthropic_text import AnthropicTextCompletion
@@ -428,7 +429,7 @@ def mock_completion(
     model: str,
     messages: List,
     stream: Optional[bool] = False,
-    mock_response: Union[str, Exception, dict] = "This is a mock request",
+    mock_response: Union[str, Exception] = "This is a mock request",
     mock_tool_calls: Optional[List] = None,
     logging=None,
     custom_llm_provider=None,
@@ -476,9 +477,6 @@ def mock_completion(
         time_delay = kwargs.get("mock_delay", None)
         if time_delay is not None:
             time.sleep(time_delay)
-
-        if isinstance(mock_response, dict):
-            return ModelResponse(**mock_response)
 
         model_response = ModelResponse(stream=stream)
         if stream is True:
@@ -1693,6 +1691,45 @@ def completion(
                     model_response,
                     model,
                     custom_llm_provider="oobabooga",
+                    logging_obj=logging,
+                )
+                return response
+            response = model_response
+        elif custom_llm_provider == "yandex":
+            custom_llm_provider = "yandex"
+            api_key = (
+                api_key
+                or litellm.api_key
+                or get_secret("YANDEX_API_KEY")
+            )
+            api_base = (
+                api_base
+                or litellm.api_base
+                or get_secret("YANDEXGTP_BASE_URL")
+                or "https://llm.api.cloud.yandex.net/foundationModels/v1/completion"
+            )            
+            litellm_params["YANDEX_FOLDER_ID"] = (get_secret("YANDEX_FOLDER_ID") or litellm_params["yandex_folder_id"])
+            model_response = yandex.completion(
+                model=model,
+                messages=messages,
+                model_response=model_response,
+                api_base=api_base,  # type: ignore
+                print_verbose=print_verbose,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                api_key=api_key,
+                logger_fn=logger_fn,
+                encoding=encoding,
+                logging_obj=logging,
+            )
+           
+            
+            if "stream" in optional_params and optional_params["stream"] == True:
+                # don't try to access stream object,
+                response = CustomStreamWrapper(
+                    model_response,
+                    model,
+                    custom_llm_provider="yandex",
                     logging_obj=logging,
                 )
                 return response
@@ -3350,6 +3387,16 @@ def embedding(
                 optional_params=optional_params,
                 model_response=EmbeddingResponse(),
             )
+        elif custom_llm_provider == "yandex":
+            response = yandex.embedding(
+                model=model,
+                input=input,
+                encoding=encoding,
+                api_base=api_base,
+                logging_obj=logging,
+                optional_params=optional_params,
+                model_response=EmbeddingResponse(),
+            )
         elif custom_llm_provider == "ollama":
             api_base = (
                 litellm.api_base
@@ -3855,20 +3902,14 @@ def moderation(
 
 
 @client
-async def amoderation(
-    input: str, model: Optional[str] = None, api_key: Optional[str] = None, **kwargs
-):
+async def amoderation(input: str, model: str, api_key: Optional[str] = None, **kwargs):
     # only supports open ai for now
     api_key = (
         api_key or litellm.api_key or litellm.openai_key or get_secret("OPENAI_API_KEY")
     )
     openai_client = kwargs.get("client", None)
     if openai_client is None:
-
-        # call helper to get OpenAI client
-        # _get_openai_client maintains in-memory caching logic for OpenAI clients
-        openai_client = openai_chat_completions._get_openai_client(
-            is_async=True,
+        openai_client = openai.AsyncOpenAI(
             api_key=api_key,
         )
     response = await openai_client.moderations.create(input=input, model=model)

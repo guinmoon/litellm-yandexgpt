@@ -1,3 +1,23 @@
+## Это форк LiteLLM с возможностью использовать модели от Yandex
+
+## Запуск
+```BASH
+cd YANDEX_FOLDER_ID=<Ваш FolderID> python3 proxy_cli.py --config config.yml 
+```
+## Содержимое конфига
+```YAML
+model_list: 
+  - model_name: 
+    litellm_params: 
+      model: yandex/yandexgpt-lite   
+      api_key: AQVN30_PoL8sF6Yz-gzYLcwRV
+
+  - model_name: yandexgpt-pro  
+    litellm_params: 
+      model: yandex/yandexgpt   
+      api_key: AQVN30_PoL8sF6Yz-gzY1ww1OZLcwRV
+```
+
 <h1 align="center">
         🚅 LiteLLM
     </h1>

@@ -280,7 +280,7 @@ async def test_langfuse_masked_input_output(langfuse_client):
 
 
 @pytest.mark.asyncio
-async def test_aaalangfuse_logging_metadata(langfuse_client):
+async def test_alangfuse_logging_metadata(langfuse_client):
     """
     Test that creates multiple traces, with a varying number of generations and sets various metadata fields
     Confirms that no metadata that is standard within Langfuse is duplicated in the respective trace or generation metadata
@@ -362,9 +362,8 @@ async def test_aaalangfuse_logging_metadata(langfuse_client):
             print(response)
             metadata["existing_trace_id"] = trace_id
 
-            await asyncio.sleep(2)
     langfuse_client.flush()
-    # await asyncio.sleep(10)
+    await asyncio.sleep(10)
 
     # Tests the metadata filtering and the override of the output to be the last generation
     for trace_id, generation_ids in trace_identifiers.items():
@@ -868,39 +867,3 @@ async def test_make_request():
             }
         },
     )
-
-
-@pytest.mark.skip(
-    reason="local only test, use this to verify if dynamic langfuse logging works as expected"
-)
-def test_aaalangfuse_dynamic_logging():
-    """
-    pass in langfuse credentials via completion call
-
-    assert call is logged.
-
-    Covers the team-logging scenario.
-    """
-    import uuid
-
-    import langfuse
-
-    trace_id = str(uuid.uuid4())
-    _ = litellm.completion(
-        model="gpt-3.5-turbo",
-        messages=[{"role": "user", "content": "Hey"}],
-        mock_response="Hey! how's it going?",
-        langfuse_public_key=os.getenv("LANGFUSE_PROJECT2_PUBLIC"),
-        langfuse_secret_key=os.getenv("LANGFUSE_PROJECT2_SECRET"),
-        metadata={"trace_id": trace_id},
-        success_callback=["langfuse"],
-    )
-
-    time.sleep(3)
-
-    langfuse_client = langfuse.Langfuse(
-        public_key=os.getenv("LANGFUSE_PROJECT2_PUBLIC"),
-        secret_key=os.getenv("LANGFUSE_PROJECT2_SECRET"),
-    )
-
-    langfuse_client.get_trace(id=trace_id)

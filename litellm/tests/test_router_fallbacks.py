@@ -1,12 +1,8 @@
 #### What this tests ####
 #    This tests calling router with fallback models
 
-import asyncio
-import os
-import sys
-import time
-import traceback
-
+import sys, os, time
+import traceback, asyncio
 import pytest
 
 sys.path.insert(
@@ -766,11 +762,9 @@ def test_ausage_based_routing_fallbacks():
         # The Request should fail azure/gpt-4-fast. Then fallback -> "azure/gpt-4-basic" -> "openai-gpt-4"
         # It should work with "openai-gpt-4"
         import os
-
-        from dotenv import load_dotenv
-
         import litellm
         from litellm import Router
+        from dotenv import load_dotenv
 
         load_dotenv()
 
@@ -1118,19 +1112,9 @@ async def test_client_side_fallbacks_list(sync_mode):
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])
-@pytest.mark.parametrize("content_filter_response_exception", [True, False])
 @pytest.mark.asyncio
-async def test_router_content_policy_fallbacks(
-    sync_mode, content_filter_response_exception
-):
+async def test_router_content_policy_fallbacks(sync_mode):
     os.environ["LITELLM_LOG"] = "DEBUG"
-
-    if content_filter_response_exception:
-        mock_response = Exception("content filtering policy")
-    else:
-        mock_response = litellm.ModelResponse(
-            choices=[litellm.Choices(finish_reason="content_filter")]
-        )
     router = Router(
         model_list=[
             {
@@ -1138,13 +1122,13 @@ async def test_router_content_policy_fallbacks(
                 "litellm_params": {
                     "model": "claude-2",
                     "api_key": "",
-                    "mock_response": mock_response,
+                    "mock_response": Exception("content filtering policy"),
                 },
             },
             {
                 "model_name": "my-fallback-model",
                 "litellm_params": {
-                    "model": "openai/my-fake-model",
+                    "model": "claude-2",
                     "api_key": "",
                     "mock_response": "This works!",
                 },
@@ -1181,5 +1165,3 @@ async def test_router_content_policy_fallbacks(
             model="claude-2",
             messages=[{"role": "user", "content": "Hey, how's it going?"}],
         )
-
-    assert response.model == "my-fake-model"

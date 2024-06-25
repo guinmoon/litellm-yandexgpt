@@ -9,10 +9,9 @@
 
 ## LiteLLM versions of the OpenAI Exception Types
 
-from typing import Optional
-
-import httpx
 import openai
+import httpx
+from typing import Optional
 
 
 class AuthenticationError(openai.AuthenticationError):  # type: ignore
@@ -659,8 +658,15 @@ class APIResponseValidationError(openai.APIResponseValidationError):  # type: ig
 
 
 class OpenAIError(openai.OpenAIError):  # type: ignore
-    def __init__(self, original_exception=None):
-        super().__init__()
+    def __init__(self, original_exception):
+        self.status_code = original_exception.http_status
+        super().__init__(
+            http_body=original_exception.http_body,
+            http_status=original_exception.http_status,
+            json_body=original_exception.json_body,
+            headers=original_exception.headers,
+            code=original_exception.code,
+        )
         self.llm_provider = "openai"
 
 

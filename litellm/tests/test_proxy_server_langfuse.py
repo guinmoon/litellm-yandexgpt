@@ -1,24 +1,19 @@
-import os
-import sys
+import sys, os
 import traceback
-
 from dotenv import load_dotenv
 
 load_dotenv()
-import io
-import os
+import os, io
 
 # this file is to test litellm/proxy
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-import logging
-
-import pytest
-
+import pytest, logging
 import litellm
-from litellm import RateLimitError, Timeout, completion, completion_cost, embedding
+from litellm import embedding, completion, completion_cost, Timeout
+from litellm import RateLimitError
 
 # Configure logging
 logging.basicConfig(
@@ -26,16 +21,14 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
 )
 
-from fastapi import FastAPI
-
 # test /chat/completion request to the proxy
 from fastapi.testclient import TestClient
-
-from litellm.proxy.proxy_server import (  # Replace with the actual module where your FastAPI router is defined
+from fastapi import FastAPI
+from litellm.proxy.proxy_server import (
     router,
     save_worker_config,
     startup_event,
-)
+)  # Replace with the actual module where your FastAPI router is defined
 
 filepath = os.path.dirname(os.path.abspath(__file__))
 config_fp = f"{filepath}/test_configs/test_config.yaml"
@@ -74,9 +67,6 @@ def client():
         yield client
 
 
-@pytest.mark.skip(
-    reason="Init multiple Langfuse clients causing OOM issues. Reduce init clients on ci/cd. "
-)
 def test_chat_completion(client):
     try:
         # Your test data

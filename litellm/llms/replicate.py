@@ -1,18 +1,13 @@
-import asyncio
+import os, types
 import json
-import os
-import time
-import types
-from typing import Any, Callable, Optional, Tuple, Union
-
-import httpx  # type: ignore
 import requests  # type: ignore
-
-import litellm
+import time
+from typing import Callable, Optional, Union, Tuple, Any
+from litellm.utils import ModelResponse, Usage, CustomStreamWrapper
+import litellm, asyncio
+import httpx  # type: ignore
+from .prompt_templates.factory import prompt_factory, custom_prompt
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-from litellm.utils import CustomStreamWrapper, ModelResponse, Usage
-
-from .prompt_templates.factory import custom_prompt, prompt_factory
 
 
 class ReplicateError(Exception):
@@ -334,15 +329,7 @@ async def async_handle_prediction_response_streaming(
             response_data = response.json()
             status = response_data["status"]
             if "output" in response_data:
-                try:
-                    output_string = "".join(response_data["output"])
-                except Exception as e:
-                    raise ReplicateError(
-                        status_code=422,
-                        message="Unable to parse response. Got={}".format(
-                            response_data["output"]
-                        ),
-                    )
+                output_string = "".join(response_data["output"])
                 new_output = output_string[len(previous_output) :]
                 print_verbose(f"New chunk: {new_output}")
                 yield {"output": new_output, "status": status}

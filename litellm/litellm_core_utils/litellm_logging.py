@@ -10,7 +10,7 @@ import sys
 import time
 import traceback
 import uuid
-from typing import Any, Callable, Dict, List, Literal, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import litellm
 from litellm import (
@@ -19,8 +19,7 @@ from litellm import (
     turn_off_message_logging,
     verbose_logger,
 )
-
-from litellm.caching import InMemoryCache, S3Cache, DualCache
+from litellm.caching import S3Cache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_logging,
@@ -112,25 +111,7 @@ additional_details: Optional[Dict[str, str]] = {}
 local_cache: Optional[Dict[str, str]] = {}
 last_fetched_at = None
 last_fetched_at_keys = None
-
-
 ####
-class ServiceTraceIDCache:
-    def __init__(self) -> None:
-        self.cache = InMemoryCache()
-
-    def get_cache(self, litellm_call_id: str, service_name: str) -> Optional[str]:
-        key_name = "{}:{}".format(service_name, litellm_call_id)
-        response = self.cache.get_cache(key=key_name)
-        return response
-
-    def set_cache(self, litellm_call_id: str, service_name: str, trace_id: str) -> None:
-        key_name = "{}:{}".format(service_name, litellm_call_id)
-        self.cache.set_cache(key=key_name, value=trace_id)
-        return None
-
-
-in_memory_trace_id_cache = ServiceTraceIDCache()
 
 
 class Logging:
@@ -174,7 +155,7 @@ class Logging:
                     new_messages.append({"role": "user", "content": m})
                 messages = new_messages
         self.model = model
-        self.messages = copy.deepcopy(messages)
+        self.messages = messages
         self.stream = stream
         self.start_time = start_time  # log the call start time
         self.call_type = call_type
@@ -264,17 +245,10 @@ class Logging:
             if headers is None:
                 headers = {}
             data = additional_args.get("complete_input_dict", {})
-            api_base = str(additional_args.get("api_base", ""))
-            if "key=" in api_base:
-                # Find the position of "key=" in the string
-                key_index = api_base.find("key=") + 4
-                # Mask the last 5 characters after "key="
-                masked_api_base = (
-                    api_base[:key_index] + "*" * 5 + api_base[key_index + 5 :]
-                )
-            else:
-                masked_api_base = api_base
-            self.model_call_details["litellm_params"]["api_base"] = masked_api_base
+            api_base = additional_args.get("api_base", "")
+            self.model_call_details["litellm_params"]["api_base"] = str(
+                api_base
+            )  # used for alerting
             masked_headers = {
                 k: (
                     (v[:-44] + "*" * 44)
@@ -847,7 +821,7 @@ class Logging:
                                 langfuse_secret=self.langfuse_secret,
                                 langfuse_host=self.langfuse_host,
                             )
-                        _response = langFuseLogger.log_event(
+                        langFuseLogger.log_event(
                             kwargs=kwargs,
                             response_obj=result,
                             start_time=start_time,
@@ -855,14 +829,6 @@ class Logging:
                             user_id=kwargs.get("user", None),
                             print_verbose=print_verbose,
                         )
-                        if _response is not None and isinstance(_response, dict):
-                            _trace_id = _response.get("trace_id", None)
-                            if _trace_id is not None:
-                                in_memory_trace_id_cache.set_cache(
-                                    litellm_call_id=self.litellm_call_id,
-                                    service_name="langfuse",
-                                    trace_id=_trace_id,
-                                )
                     if callback == "datadog":
                         global dataDogLogger
                         verbose_logger.debug("reaches datadog for success logging!")
@@ -1641,7 +1607,7 @@ class Logging:
                                 langfuse_secret=self.langfuse_secret,
                                 langfuse_host=self.langfuse_host,
                             )
-                        _response = langFuseLogger.log_event(
+                        langFuseLogger.log_event(
                             start_time=start_time,
                             end_time=end_time,
                             response_obj=None,
@@ -1651,14 +1617,6 @@ class Logging:
                             level="ERROR",
                             kwargs=self.model_call_details,
                         )
-                        if _response is not None and isinstance(_response, dict):
-                            _trace_id = _response.get("trace_id", None)
-                            if _trace_id is not None:
-                                in_memory_trace_id_cache.set_cache(
-                                    litellm_call_id=self.litellm_call_id,
-                                    service_name="langfuse",
-                                    trace_id=_trace_id,
-                                )
                     if callback == "traceloop":
                         traceloopLogger.log_event(
                             start_time=start_time,
@@ -1762,24 +1720,6 @@ class Logging:
                         str(e), traceback.format_exc(), callback
                     )
                 )
-
-    def _get_trace_id(self, service_name: Literal["langfuse"]) -> Optional[str]:
-        """
-        For the given service (e.g. langfuse), return the trace_id actually logged.
-
-        Used for constructing the url in slack alerting.
-
-        Returns:
-            - str: The logged trace id
-            - None: If trace id not yet emitted.
-        """
-        trace_id: Optional[str] = None
-        if service_name == "langfuse":
-            trace_id = in_memory_trace_id_cache.get_cache(
-                litellm_call_id=self.litellm_call_id, service_name=service_name
-            )
-
-        return trace_id
 
 
 def set_callbacks(callback_list, function_id=None):
@@ -1900,11 +1840,7 @@ def set_callbacks(callback_list, function_id=None):
 
 def _init_custom_logger_compatible_class(
     logging_integration: litellm._custom_logger_compatible_callbacks_literal,
-    internal_usage_cache: Optional[DualCache],
-    llm_router: Optional[
-        Any
-    ],  # expect litellm.Router, but typing errors due to circular import
-) -> CustomLogger:
+) -> Callable:
     if logging_integration == "lago":
         for callback in _in_memory_loggers:
             if isinstance(callback, LagoLogger):
@@ -1940,58 +1876,3 @@ def _init_custom_logger_compatible_class(
         _otel_logger = OpenTelemetry(config=otel_config)
         _in_memory_loggers.append(_otel_logger)
         return _otel_logger  # type: ignore
-    elif logging_integration == "dynamic_rate_limiter":
-        from litellm.proxy.hooks.dynamic_rate_limiter import (
-            _PROXY_DynamicRateLimitHandler,
-        )
-
-        for callback in _in_memory_loggers:
-            if isinstance(callback, _PROXY_DynamicRateLimitHandler):
-                return callback  # type: ignore
-
-        if internal_usage_cache is None:
-            raise Exception(
-                "Internal Error: Cache cannot be empty - internal_usage_cache={}".format(
-                    internal_usage_cache
-                )
-            )
-
-        dynamic_rate_limiter_obj = _PROXY_DynamicRateLimitHandler(
-            internal_usage_cache=internal_usage_cache
-        )
-
-        if llm_router is not None and isinstance(llm_router, litellm.Router):
-            dynamic_rate_limiter_obj.update_variables(llm_router=llm_router)
-        _in_memory_loggers.append(dynamic_rate_limiter_obj)
-        return dynamic_rate_limiter_obj  # type: ignore
-
-
-def get_custom_logger_compatible_class(
-    logging_integration: litellm._custom_logger_compatible_callbacks_literal,
-) -> Optional[CustomLogger]:
-    if logging_integration == "lago":
-        for callback in _in_memory_loggers:
-            if isinstance(callback, LagoLogger):
-                return callback
-    elif logging_integration == "openmeter":
-        for callback in _in_memory_loggers:
-            if isinstance(callback, OpenMeterLogger):
-                return callback
-    elif logging_integration == "logfire":
-        if "LOGFIRE_TOKEN" not in os.environ:
-            raise ValueError("LOGFIRE_TOKEN not found in environment variables")
-        from litellm.integrations.opentelemetry import OpenTelemetry
-
-        for callback in _in_memory_loggers:
-            if isinstance(callback, OpenTelemetry):
-                return callback  # type: ignore
-
-    elif logging_integration == "dynamic_rate_limiter":
-        from litellm.proxy.hooks.dynamic_rate_limiter import (
-            _PROXY_DynamicRateLimitHandler,
-        )
-
-        for callback in _in_memory_loggers:
-            if isinstance(callback, _PROXY_DynamicRateLimitHandler):
-                return callback  # type: ignore
-    return None

@@ -48,189 +48,6 @@ from litellm.utils import CustomStreamWrapper, ModelResponse, Usage
 from .base import BaseLLM
 
 
-class GoogleAIStudioGeminiConfig:  # key diff from VertexAI - 'frequency_penalty' and 'presence_penalty' not supported
-    """
-    Reference: https://ai.google.dev/api/rest/v1beta/GenerationConfig
-
-    The class `GoogleAIStudioGeminiConfig` provides configuration for the Google AI Studio's Gemini API interface. Below are the parameters:
-
-    - `temperature` (float): This controls the degree of randomness in token selection.
-
-    - `max_output_tokens` (integer): This sets the limitation for the maximum amount of token in the text output. In this case, the default value is 256.
-
-    - `top_p` (float): The tokens are selected from the most probable to the least probable until the sum of their probabilities equals the `top_p` value. Default is 0.95.
-
-    - `top_k` (integer): The value of `top_k` determines how many of the most probable tokens are considered in the selection. For example, a `top_k` of 1 means the selected token is the most probable among all tokens. The default value is 40.
-
-    - `response_mime_type` (str): The MIME type of the response. The default value is 'text/plain'. Other values - `application/json`.
-
-    - `response_schema` (dict): Optional. Output response schema of the generated candidate text when response mime type can have schema. Schema can be objects, primitives or arrays and is a subset of OpenAPI schema. If set, a compatible response_mime_type must also be set. Compatible mimetypes: application/json: Schema for JSON response.
-
-    - `candidate_count` (int): Number of generated responses to return.
-
-    - `stop_sequences` (List[str]): The set of character sequences (up to 5) that will stop output generation. If specified, the API will stop at the first appearance of a stop sequence. The stop sequence will not be included as part of the response.
-
-    Note: Please make sure to modify the default parameters as required for your use case.
-    """
-
-    temperature: Optional[float] = None
-    max_output_tokens: Optional[int] = None
-    top_p: Optional[float] = None
-    top_k: Optional[int] = None
-    response_mime_type: Optional[str] = None
-    response_schema: Optional[dict] = None
-    candidate_count: Optional[int] = None
-    stop_sequences: Optional[list] = None
-
-    def __init__(
-        self,
-        temperature: Optional[float] = None,
-        max_output_tokens: Optional[int] = None,
-        top_p: Optional[float] = None,
-        top_k: Optional[int] = None,
-        response_mime_type: Optional[str] = None,
-        response_schema: Optional[dict] = None,
-        candidate_count: Optional[int] = None,
-        stop_sequences: Optional[list] = None,
-    ) -> None:
-        locals_ = locals()
-        for key, value in locals_.items():
-            if key != "self" and value is not None:
-                setattr(self.__class__, key, value)
-
-    @classmethod
-    def get_config(cls):
-        return {
-            k: v
-            for k, v in cls.__dict__.items()
-            if not k.startswith("__")
-            and not isinstance(
-                v,
-                (
-                    types.FunctionType,
-                    types.BuiltinFunctionType,
-                    classmethod,
-                    staticmethod,
-                ),
-            )
-            and v is not None
-        }
-
-    def get_supported_openai_params(self):
-        return [
-            "temperature",
-            "top_p",
-            "max_tokens",
-            "stream",
-            "tools",
-            "tool_choice",
-            "response_format",
-            "n",
-            "stop",
-        ]
-
-    def map_tool_choice_values(
-        self, model: str, tool_choice: Union[str, dict]
-    ) -> Optional[ToolConfig]:
-        if tool_choice == "none":
-            return ToolConfig(functionCallingConfig=FunctionCallingConfig(mode="NONE"))
-        elif tool_choice == "required":
-            return ToolConfig(functionCallingConfig=FunctionCallingConfig(mode="ANY"))
-        elif tool_choice == "auto":
-            return ToolConfig(functionCallingConfig=FunctionCallingConfig(mode="AUTO"))
-        elif isinstance(tool_choice, dict):
-            # only supported for anthropic + mistral models - https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolChoice.html
-            name = tool_choice.get("function", {}).get("name", "")
-            return ToolConfig(
-                functionCallingConfig=FunctionCallingConfig(
-                    mode="ANY", allowed_function_names=[name]
-                )
-            )
-        else:
-            raise litellm.utils.UnsupportedParamsError(
-                message="VertexAI doesn't support tool_choice={}. Supported tool_choice values=['auto', 'required', json object]. To drop it from the call, set `litellm.drop_params = True.".format(
-                    tool_choice
-                ),
-                status_code=400,
-            )
-
-    def map_openai_params(
-        self,
-        model: str,
-        non_default_params: dict,
-        optional_params: dict,
-    ):
-        for param, value in non_default_params.items():
-            if param == "temperature":
-                optional_params["temperature"] = value
-            if param == "top_p":
-                optional_params["top_p"] = value
-            if (
-                param == "stream" and value is True
-            ):  # sending stream = False, can cause it to get passed unchecked and raise issues
-                optional_params["stream"] = value
-            if param == "n":
-                optional_params["candidate_count"] = value
-            if param == "stop":
-                if isinstance(value, str):
-                    optional_params["stop_sequences"] = [value]
-                elif isinstance(value, list):
-                    optional_params["stop_sequences"] = value
-            if param == "max_tokens":
-                optional_params["max_output_tokens"] = value
-            if param == "response_format" and value["type"] == "json_object":  # type: ignore
-                optional_params["response_mime_type"] = "application/json"
-            if param == "tools" and isinstance(value, list):
-                gtool_func_declarations = []
-                for tool in value:
-                    gtool_func_declaration = FunctionDeclaration(
-                        name=tool["function"]["name"],
-                        description=tool["function"].get("description", ""),
-                        parameters=tool["function"].get("parameters", {}),
-                    )
-                    gtool_func_declarations.append(gtool_func_declaration)
-                optional_params["tools"] = [
-                    Tools(function_declarations=gtool_func_declarations)
-                ]
-            if param == "tool_choice" and (
-                isinstance(value, str) or isinstance(value, dict)
-            ):
-                _tool_choice_value = self.map_tool_choice_values(
-                    model=model, tool_choice=value  # type: ignore
-                )
-                if _tool_choice_value is not None:
-                    optional_params["tool_choice"] = _tool_choice_value
-        return optional_params
-
-    def get_mapped_special_auth_params(self) -> dict:
-        """
-        Common auth params across bedrock/vertex_ai/azure/watsonx
-        """
-        return {"project": "vertex_project", "region_name": "vertex_location"}
-
-    def map_special_auth_params(self, non_default_params: dict, optional_params: dict):
-        mapped_params = self.get_mapped_special_auth_params()
-
-        for param, value in non_default_params.items():
-            if param in mapped_params:
-                optional_params[mapped_params[param]] = value
-        return optional_params
-
-    def get_flagged_finish_reasons(self) -> Dict[str, str]:
-        """
-        Return Dictionary of finish reasons which indicate response was flagged
-
-        and what it means
-        """
-        return {
-            "SAFETY": "The token generation was stopped as the response was flagged for safety reasons. NOTE: When streaming the Candidate.content will be empty if content filters blocked the output.",
-            "RECITATION": "The token generation was stopped as the response was flagged for unauthorized citations.",
-            "BLOCKLIST": "The token generation was stopped as the response was flagged for the terms which are included from the terminology blocklist.",
-            "PROHIBITED_CONTENT": "The token generation was stopped as the response was flagged for the prohibited contents.",
-            "SPII": "The token generation was stopped as the response was flagged for Sensitive Personally Identifiable Information (SPII) contents.",
-        }
-
-
 class VertexGeminiConfig:
     """
     Reference: https://cloud.google.com/vertex-ai/docs/generative-ai/chat/test-chat-prompts
@@ -315,8 +132,6 @@ class VertexGeminiConfig:
             "response_format",
             "n",
             "stop",
-            "frequency_penalty",
-            "presence_penalty",
         ]
 
     def map_tool_choice_values(
@@ -562,47 +377,7 @@ class VertexLLM(BaseLLM):
                 status_code=422,
             )
 
-        ## GET MODEL ##
-        model_response.model = model
-
         ## CHECK IF RESPONSE FLAGGED
-        if "promptFeedback" in completion_response:
-            if "blockReason" in completion_response["promptFeedback"]:
-                # If set, the prompt was blocked and no candidates are returned. Rephrase your prompt
-                model_response.choices[0].finish_reason = "content_filter"
-
-                chat_completion_message: ChatCompletionResponseMessage = {
-                    "role": "assistant",
-                    "content": None,
-                }
-
-                choice = litellm.Choices(
-                    finish_reason="content_filter",
-                    index=0,
-                    message=chat_completion_message,  # type: ignore
-                    logprobs=None,
-                    enhancements=None,
-                )
-
-                model_response.choices = [choice]
-
-                ## GET USAGE ##
-                usage = litellm.Usage(
-                    prompt_tokens=completion_response["usageMetadata"][
-                        "promptTokenCount"
-                    ],
-                    completion_tokens=completion_response["usageMetadata"].get(
-                        "candidatesTokenCount", 0
-                    ),
-                    total_tokens=completion_response["usageMetadata"][
-                        "totalTokenCount"
-                    ],
-                )
-
-                setattr(model_response, "usage", usage)
-
-                return model_response
-
         if len(completion_response["candidates"]) > 0:
             content_policy_violations = (
                 VertexGeminiConfig().get_flagged_finish_reasons()
@@ -613,45 +388,26 @@ class VertexLLM(BaseLLM):
                 in content_policy_violations.keys()
             ):
                 ## CONTENT POLICY VIOLATION ERROR
-                model_response.choices[0].finish_reason = "content_filter"
-
-                chat_completion_message = {
-                    "role": "assistant",
-                    "content": None,
-                }
-
-                choice = litellm.Choices(
-                    finish_reason="content_filter",
-                    index=0,
-                    message=chat_completion_message,  # type: ignore
-                    logprobs=None,
-                    enhancements=None,
-                )
-
-                model_response.choices = [choice]
-
-                ## GET USAGE ##
-                usage = litellm.Usage(
-                    prompt_tokens=completion_response["usageMetadata"][
-                        "promptTokenCount"
-                    ],
-                    completion_tokens=completion_response["usageMetadata"].get(
-                        "candidatesTokenCount", 0
+                raise VertexAIError(
+                    status_code=400,
+                    message="The response was blocked. Reason={}. Raw Response={}".format(
+                        content_policy_violations[
+                            completion_response["candidates"][0]["finishReason"]
+                        ],
+                        completion_response,
                     ),
-                    total_tokens=completion_response["usageMetadata"][
-                        "totalTokenCount"
-                    ],
                 )
-
-                setattr(model_response, "usage", usage)
-
-                return model_response
 
         model_response.choices = []  # type: ignore
 
+        ## GET MODEL ##
+        model_response.model = model
+
         try:
             ## GET TEXT ##
-            chat_completion_message = {"role": "assistant"}
+            chat_completion_message: ChatCompletionResponseMessage = {
+                "role": "assistant"
+            }
             content_str = ""
             tools: List[ChatCompletionToolCallChunk] = []
             for idx, candidate in enumerate(completion_response["candidates"]):
@@ -691,9 +447,9 @@ class VertexLLM(BaseLLM):
             ## GET USAGE ##
             usage = litellm.Usage(
                 prompt_tokens=completion_response["usageMetadata"]["promptTokenCount"],
-                completion_tokens=completion_response["usageMetadata"].get(
-                    "candidatesTokenCount", 0
-                ),
+                completion_tokens=completion_response["usageMetadata"][
+                    "candidatesTokenCount"
+                ],
                 total_tokens=completion_response["usageMetadata"]["totalTokenCount"],
             )
 
@@ -1277,7 +1033,6 @@ class ModelResponseIterator:
     def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:
         try:
             processed_chunk = GenerateContentResponseBody(**chunk)  # type: ignore
-
             text = ""
             tool_use: Optional[ChatCompletionToolCallChunk] = None
             is_finished = False
@@ -1296,8 +1051,7 @@ class ModelResponseIterator:
                 finish_reason = map_finish_reason(
                     finish_reason=gemini_chunk["finishReason"]
                 )
-                ## DO NOT SET 'finish_reason' = True
-                ## GEMINI SETS FINISHREASON ON EVERY CHUNK!
+                is_finished = True
 
             if "usageMetadata" in processed_chunk:
                 usage = ChatCompletionUsageBlock(
@@ -1311,7 +1065,7 @@ class ModelResponseIterator:
             returned_chunk = GenericStreamingChunk(
                 text=text,
                 tool_use=tool_use,
-                is_finished=False,
+                is_finished=is_finished,
                 finish_reason=finish_reason,
                 usage=usage,
                 index=0,
@@ -1329,8 +1083,9 @@ class ModelResponseIterator:
             chunk = self.response_iterator.__next__()
             self.coro.send(chunk)
             if self.events:
-                event = self.events.pop(0)
+                event = self.events[0]
                 json_chunk = event
+                self.events.clear()
                 return self.chunk_parser(chunk=json_chunk)
             return GenericStreamingChunk(
                 text="",
@@ -1341,9 +1096,6 @@ class ModelResponseIterator:
                 tool_use=None,
             )
         except StopIteration:
-            if self.events:  # flush the events
-                event = self.events.pop(0)  # Remove the first event
-                return self.chunk_parser(chunk=event)
             raise StopIteration
         except ValueError as e:
             raise RuntimeError(f"Error parsing chunk: {e}")
@@ -1358,8 +1110,9 @@ class ModelResponseIterator:
             chunk = await self.async_response_iterator.__anext__()
             self.coro.send(chunk)
             if self.events:
-                event = self.events.pop(0)
+                event = self.events[0]
                 json_chunk = event
+                self.events.clear()
                 return self.chunk_parser(chunk=json_chunk)
             return GenericStreamingChunk(
                 text="",
@@ -1370,9 +1123,6 @@ class ModelResponseIterator:
                 tool_use=None,
             )
         except StopAsyncIteration:
-            if self.events:  # flush the events
-                event = self.events.pop(0)  # Remove the first event
-                return self.chunk_parser(chunk=event)
             raise StopAsyncIteration
         except ValueError as e:
             raise RuntimeError(f"Error parsing chunk: {e}")

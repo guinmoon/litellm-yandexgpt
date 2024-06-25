@@ -193,6 +193,7 @@ additional_details: Optional[Dict[str, str]] = {}
 local_cache: Optional[Dict[str, str]] = {}
 last_fetched_at = None
 last_fetched_at_keys = None
+
 ######## Model Response #########################
 
 
@@ -340,15 +341,14 @@ def function_setup(
         )
     try:
         global callback_list, add_breadcrumb, user_logger_fn, Logging
-
         function_id = kwargs["id"] if "id" in kwargs else None
 
         if len(litellm.callbacks) > 0:
             for callback in litellm.callbacks:
                 # check if callback is a string - e.g. "lago", "openmeter"
                 if isinstance(callback, str):
-                    callback = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(  # type: ignore
-                        callback, internal_usage_cache=None, llm_router=None
+                    callback = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(
+                        callback
                     )
                     if any(
                         isinstance(cb, type(callback))
@@ -2711,16 +2711,6 @@ def get_optional_params(
         print_verbose(
             f"(end) INSIDE THE VERTEX AI OPTIONAL PARAM BLOCK - optional_params: {optional_params}"
         )
-    elif custom_llm_provider == "gemini":
-        supported_params = get_supported_openai_params(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
-        _check_valid_arg(supported_params=supported_params)
-        optional_params = litellm.GoogleAIStudioGeminiConfig().map_openai_params(
-            non_default_params=non_default_params,
-            optional_params=optional_params,
-            model=model,
-        )
     elif custom_llm_provider == "vertex_ai_beta" or custom_llm_provider == "gemini":
         supported_params = get_supported_openai_params(
             model=model, custom_llm_provider=custom_llm_provider
@@ -3276,11 +3266,7 @@ def get_optional_params(
             optional_params["top_logprobs"] = top_logprobs
         if extra_headers is not None:
             optional_params["extra_headers"] = extra_headers
-    if (
-        custom_llm_provider
-        in ["openai", "azure", "text-completion-openai"]
-        + litellm.openai_compatible_providers
-    ):
+    if custom_llm_provider in ["openai", "azure"] + litellm.openai_compatible_providers:
         # for openai, azure we should pass the extra/passed params within `extra_body` https://github.com/openai/openai-python/blob/ac33853ba10d13ac149b1fa3ca6dba7d613065c9/src/openai/resources/models.py#L46
         extra_body = passed_params.pop("extra_body", {})
         for k in passed_params.keys():
@@ -3757,7 +3743,7 @@ def get_supported_openai_params(
         elif request_type == "embeddings":
             return litellm.DatabricksEmbeddingConfig().get_supported_openai_params()
     elif custom_llm_provider == "palm" or custom_llm_provider == "gemini":
-        return litellm.GoogleAIStudioGeminiConfig().get_supported_openai_params()
+        return litellm.VertexAIConfig().get_supported_openai_params()
     elif custom_llm_provider == "vertex_ai":
         if request_type == "chat_completion":
             return litellm.VertexAIConfig().get_supported_openai_params()
@@ -3896,16 +3882,12 @@ def get_formatted_prompt(
 
 
 def get_response_string(response_obj: ModelResponse) -> str:
-    _choices: List[Union[Choices, StreamingChoices]] = response_obj.choices
+    _choices: List[Choices] = response_obj.choices  # type: ignore
 
     response_str = ""
     for choice in _choices:
-        if isinstance(choice, Choices):
-            if choice.message.content is not None:
-                response_str += choice.message.content
-        elif isinstance(choice, StreamingChoices):
-            if choice.delta.content is not None:
-                response_str += choice.delta.content
+        if choice.message.content is not None:
+            response_str += choice.message.content
 
     return response_str
 
@@ -5914,7 +5896,6 @@ def exception_type(
                         )
                 else:
                     # if no status code then it is an APIConnectionError: https://github.com/openai/openai-python#handling-errors
-                    # exception_mapping_worked = True
                     raise APIConnectionError(
                         message=f"APIConnectionError: {exception_provider} - {message}",
                         llm_provider=custom_llm_provider,
@@ -5928,28 +5909,21 @@ def exception_type(
                 if "prompt is too long" in error_str or "prompt: length" in error_str:
                     exception_mapping_worked = True
                     raise ContextWindowExceededError(
-                        message="AnthropicError - {}".format(error_str),
+                        message=error_str,
                         model=model,
                         llm_provider="anthropic",
                     )
                 if "Invalid API Key" in error_str:
                     exception_mapping_worked = True
                     raise AuthenticationError(
-                        message="AnthropicError - {}".format(error_str),
+                        message=error_str,
                         model=model,
                         llm_provider="anthropic",
                     )
                 if "content filtering policy" in error_str:
                     exception_mapping_worked = True
                     raise ContentPolicyViolationError(
-                        message="AnthropicError - {}".format(error_str),
-                        model=model,
-                        llm_provider="anthropic",
-                    )
-                if "Client error '400 Bad Request'" in error_str:
-                    exception_mapping_worked = True
-                    raise BadRequestError(
-                        message="AnthropicError - {}".format(error_str),
+                        message=error_str,
                         model=model,
                         llm_provider="anthropic",
                     )
@@ -5961,6 +5935,7 @@ def exception_type(
                             message=f"AnthropicException - {error_str}",
                             llm_provider="anthropic",
                             model=model,
+                            response=original_exception.response,
                         )
                     elif (
                         original_exception.status_code == 400
@@ -5971,13 +5946,7 @@ def exception_type(
                             message=f"AnthropicException - {error_str}",
                             model=model,
                             llm_provider="anthropic",
-                        )
-                    elif original_exception.status_code == 404:
-                        exception_mapping_worked = True
-                        raise NotFoundError(
-                            message=f"AnthropicException - {error_str}",
-                            model=model,
-                            llm_provider="anthropic",
+                            response=original_exception.response,
                         )
                     elif original_exception.status_code == 408:
                         exception_mapping_worked = True
@@ -5992,20 +5961,16 @@ def exception_type(
                             message=f"AnthropicException - {error_str}",
                             llm_provider="anthropic",
                             model=model,
+                            response=original_exception.response,
                         )
                     elif original_exception.status_code == 500:
                         exception_mapping_worked = True
-                        raise litellm.InternalServerError(
-                            message=f"AnthropicException - {error_str}. Handle with `litellm.InternalServerError`.",
+                        raise APIError(
+                            status_code=500,
+                            message=f"AnthropicException - {error_str}. Handle with `litellm.APIError`.",
                             llm_provider="anthropic",
                             model=model,
-                        )
-                    elif original_exception.status_code == 503:
-                        exception_mapping_worked = True
-                        raise litellm.ServiceUnavailableError(
-                            message=f"AnthropicException - {error_str}. Handle with `litellm.ServiceUnavailableError`.",
-                            llm_provider="anthropic",
-                            model=model,
+                            request=original_exception.request,
                         )
             elif custom_llm_provider == "replicate":
                 if "Incorrect authentication token" in error_str:
@@ -6067,14 +6032,6 @@ def exception_type(
                             message=f"ReplicateException - {original_exception.message}",
                             model=model,
                             llm_provider="replicate",
-                        )
-                    elif original_exception.status_code == 422:
-                        exception_mapping_worked = True
-                        raise UnprocessableEntityError(
-                            message=f"ReplicateException - {original_exception.message}",
-                            llm_provider="replicate",
-                            model=model,
-                            response=original_exception.response,
                         )
                     elif original_exception.status_code == 429:
                         exception_mapping_worked = True
@@ -7205,7 +7162,6 @@ def exception_type(
                         in error_str
                     )
                     or "Your task failed as a result of our safety system" in error_str
-                    or "The model produced invalid content" in error_str
                 ):
                     exception_mapping_worked = True
                     raise ContentPolicyViolationError(
@@ -7469,9 +7425,6 @@ def exception_type(
         if exception_mapping_worked:
             raise e
         else:
-            for error_type in litellm.LITELLM_EXCEPTION_TYPES:
-                if isinstance(e, error_type):
-                    raise e  # it's already mapped
             raise APIConnectionError(
                 message="{}\n{}".format(original_exception, traceback.format_exc()),
                 llm_provider="",
@@ -8598,6 +8551,42 @@ class CustomStreamWrapper:
             verbose_logger.debug(traceback.format_exc())
             return ""
 
+    def handle_yandex_completion_chunk(self, chunk):
+        try:
+            if isinstance(chunk, dict):
+                parsed_response = chunk
+            if isinstance(chunk, (str, bytes)):
+                if isinstance(chunk, bytes):
+                    parsed_response = chunk.decode("utf-8")
+                else:
+                    parsed_response = chunk
+            data_json = json.loads(parsed_response)       
+            text = data_json["result"]["alternatives"][0]["message"]["text"] 
+            status  = data_json["result"]["alternatives"][0]["status"]
+            
+            # Remove sended part
+            if len(text)>len(self.response_uptil_now):
+                text = text[len(self.response_uptil_now):]
+
+            # ALTERNATIVE_STATUS_FINAL
+            res = {
+                    "text": text,
+                    "is_finished": False if status == "ALTERNATIVE_STATUS_PARTIAL" else True,
+                    "prompt_tokens": data_json["result"]["usage"]["inputTextTokens"],
+                    "completion_tokens": data_json["result"]["usage"]["completionTokens"],
+                }
+            if  status == "ALTERNATIVE_STATUS_FINAL":
+                res["finish_reason"] = "ALTERNATIVE_STATUS_FINAL" 
+            return res
+        except:
+            verbose_logger.error(
+                "litellm.CustomStreamWrapper.handle_clarifai_chunk(): Exception occured - {}".format(
+                    str(e)
+                )
+            )
+            verbose_logger.debug(traceback.format_exc())
+            return ""
+
     def model_response_creator(self):
         _model = self.model
         _received_llm_provider = self.custom_llm_provider
@@ -8655,6 +8644,24 @@ class CustomStreamWrapper:
                 completion_obj["content"] = response_obj["text"]
                 if response_obj["is_finished"]:
                     self.received_finish_reason = response_obj["finish_reason"]
+
+            elif self.custom_llm_provider and self.custom_llm_provider == "yandex":
+                response_obj = self.handle_yandex_completion_chunk(chunk)
+                completion_obj["content"] = response_obj["text"]
+                if response_obj["is_finished"]:
+                    self.received_finish_reason = response_obj["finish_reason"]
+                if (
+                    self.stream_options
+                    and self.stream_options.get("include_usage", False) is True
+                    and response_obj["usage"] is not None
+                ):
+                    self.sent_stream_usage = True
+                    model_response.usage = litellm.Usage(
+                        prompt_tokens=response_obj["prompt_tokens"],
+                        completion_tokens=response_obj["completion_tokens"],
+                        total_tokens=response_obj["completion_tokens"]+response_obj["prompt_tokens"],
+                    )
+                
             elif self.model == "replicate" or self.custom_llm_provider == "replicate":
                 response_obj = self.handle_replicate_chunk(chunk)
                 completion_obj["content"] = response_obj["text"]
@@ -9607,11 +9614,6 @@ class CustomStreamWrapper:
                 litellm.request_timeout
             )
             if self.logging_obj is not None:
-                ## LOGGING
-                threading.Thread(
-                    target=self.logging_obj.failure_handler,
-                    args=(e, traceback_exception),
-                ).start()  # log response
                 # Handle any exceptions that might occur during streaming
                 asyncio.create_task(
                     self.logging_obj.async_failure_handler(e, traceback_exception)
@@ -9619,24 +9621,11 @@ class CustomStreamWrapper:
             raise e
         except Exception as e:
             traceback_exception = traceback.format_exc()
-            if self.logging_obj is not None:
-                ## LOGGING
-                threading.Thread(
-                    target=self.logging_obj.failure_handler,
-                    args=(e, traceback_exception),
-                ).start()  # log response
-                # Handle any exceptions that might occur during streaming
-                asyncio.create_task(
-                    self.logging_obj.async_failure_handler(e, traceback_exception)  # type: ignore
-                )
-            ## Map to OpenAI Exception
-            raise exception_type(
-                model=self.model,
-                custom_llm_provider=self.custom_llm_provider,
-                original_exception=e,
-                completion_kwargs={},
-                extra_kwargs={},
+            # Handle any exceptions that might occur during streaming
+            asyncio.create_task(
+                self.logging_obj.async_failure_handler(e, traceback_exception)  # type: ignore
             )
+            raise e
 
 
 class TextCompletionStreamWrapper:

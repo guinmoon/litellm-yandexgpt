@@ -11,7 +11,6 @@ import asyncio
 import concurrent
 import copy
 import datetime as datetime_og
-import enum
 import hashlib
 import inspect
 import json
@@ -89,10 +88,6 @@ from litellm.utils import (
     calculate_max_parallel_requests,
     get_utc_datetime,
 )
-
-
-class RoutingArgs(enum.Enum):
-    ttl = 60  # 1min (RPM/TPM expire key)
 
 
 class Router:
@@ -392,23 +387,13 @@ class Router:
             routing_strategy=routing_strategy,
             routing_strategy_args=routing_strategy_args,
         )
-        ## USAGE TRACKING ##
-        if isinstance(litellm._async_success_callback, list):
-            litellm._async_success_callback.append(self.deployment_callback_on_success)
-        else:
-            litellm._async_success_callback.append(self.deployment_callback_on_success)
         ## COOLDOWNS ##
         if isinstance(litellm.failure_callback, list):
             litellm.failure_callback.append(self.deployment_callback_on_failure)
         else:
             litellm.failure_callback = [self.deployment_callback_on_failure]
         print(  # noqa
-            f"Intialized router with Routing strategy: {self.routing_strategy}\n\n"
-            f"Routing enable_pre_call_checks: {self.enable_pre_call_checks}\n\n"
-            f"Routing fallbacks: {self.fallbacks}\n\n"
-            f"Routing content fallbacks: {self.content_policy_fallbacks}\n\n"
-            f"Routing context window fallbacks: {self.context_window_fallbacks}\n\n"
-            f"Router Redis Caching={self.cache.redis_cache}\n"
+            f"Intialized router with Routing strategy: {self.routing_strategy}\n\nRouting fallbacks: {self.fallbacks}\n\nRouting context window fallbacks: {self.context_window_fallbacks}\n\nRouter Redis Caching={self.cache.redis_cache}"
         )  # noqa
         self.routing_strategy_args = routing_strategy_args
         self.retry_policy: Optional[RetryPolicy] = retry_policy
@@ -573,18 +558,6 @@ class Router:
                 f"litellm.completion(model={model_name})\033[32m 200 OK\033[0m"
             )
 
-            ## CHECK CONTENT FILTER ERROR ##
-            if isinstance(response, ModelResponse):
-                _should_raise = self._should_raise_content_policy_error(
-                    model=model, response=response, kwargs=kwargs
-                )
-                if _should_raise:
-                    raise litellm.ContentPolicyViolationError(
-                        message="Response output was blocked.",
-                        model=model,
-                        llm_provider="",
-                    )
-
             return response
         except Exception as e:
             verbose_router_logger.info(
@@ -743,18 +716,6 @@ class Router:
             else:
                 await self.async_routing_strategy_pre_call_checks(deployment=deployment)
                 response = await _response
-
-            ## CHECK CONTENT FILTER ERROR ##
-            if isinstance(response, ModelResponse):
-                _should_raise = self._should_raise_content_policy_error(
-                    model=model, response=response, kwargs=kwargs
-                )
-                if _should_raise:
-                    raise litellm.ContentPolicyViolationError(
-                        message="Response output was blocked.",
-                        model=model,
-                        llm_provider="",
-                    )
 
             self.success_calls[model_name] += 1
             verbose_router_logger.info(
@@ -2675,68 +2636,12 @@ class Router:
                     time.sleep(_timeout)
 
             if type(original_exception) in litellm.LITELLM_EXCEPTION_TYPES:
-                setattr(original_exception, "max_retries", num_retries)
-                setattr(original_exception, "num_retries", current_attempt)
+                original_exception.max_retries = num_retries
+                original_exception.num_retries = current_attempt
 
             raise original_exception
 
     ### HELPER FUNCTIONS
-
-    async def deployment_callback_on_success(
-        self,
-        kwargs,  # kwargs to completion
-        completion_response,  # response from completion
-        start_time,
-        end_time,  # start/end time
-    ):
-        """
-        Track remaining tpm/rpm quota for model in model_list
-        """
-        try:
-            """
-            Update TPM usage on success
-            """
-            if kwargs["litellm_params"].get("metadata") is None:
-                pass
-            else:
-                model_group = kwargs["litellm_params"]["metadata"].get(
-                    "model_group", None
-                )
-
-                id = kwargs["litellm_params"].get("model_info", {}).get("id", None)
-                if model_group is None or id is None:
-                    return
-                elif isinstance(id, int):
-                    id = str(id)
-
-                total_tokens = completion_response["usage"]["total_tokens"]
-
-                # ------------
-                # Setup values
-                # ------------
-                dt = get_utc_datetime()
-                current_minute = dt.strftime(
-                    "%H-%M"
-                )  # use the same timezone regardless of system clock
-
-                tpm_key = f"global_router:{id}:tpm:{current_minute}"
-                # ------------
-                # Update usage
-                # ------------
-                # update cache
-
-                ## TPM
-                await self.cache.async_increment_cache(
-                    key=tpm_key, value=total_tokens, ttl=RoutingArgs.ttl.value
-                )
-
-        except Exception as e:
-            verbose_router_logger.error(
-                "litellm.proxy.hooks.prompt_injection_detection.py::async_pre_call_hook(): Exception occured - {}\n{}".format(
-                    str(e), traceback.format_exc()
-                )
-            )
-            pass
 
     def deployment_callback_on_failure(
         self,
@@ -2891,40 +2796,6 @@ class Router:
         except:
             # Catch all - if any exceptions default to cooling down
             return True
-
-    def _should_raise_content_policy_error(
-        self, model: str, response: ModelResponse, kwargs: dict
-    ) -> bool:
-        """
-        Determines if a content policy error should be raised.
-
-        Only raised if a fallback is available.
-
-        Else, original response is returned.
-        """
-        if response.choices[0].finish_reason != "content_filter":
-            return False
-
-        content_policy_fallbacks = kwargs.get(
-            "content_policy_fallbacks", self.content_policy_fallbacks
-        )
-        ### ONLY RAISE ERROR IF CP FALLBACK AVAILABLE ###
-        if content_policy_fallbacks is not None:
-            fallback_model_group = None
-            for item in content_policy_fallbacks:  # [{"gpt-3.5-turbo": ["gpt-4"]}]
-                if list(item.keys())[0] == model:
-                    fallback_model_group = item[model]
-                    break
-
-            if fallback_model_group is not None:
-                return True
-
-        verbose_router_logger.info(
-            "Content Policy Error occurred. No available fallbacks. Returning original response. model={}, content_policy_fallbacks={}".format(
-                model, content_policy_fallbacks
-            )
-        )
-        return False
 
     def _set_cooldown_deployments(
         self,
@@ -3219,7 +3090,7 @@ class Router:
             if not, add it - https://github.com/BerriAI/litellm/issues/2279
             """
             if (
-                is_azure_ai_studio_model is True
+                is_azure_ai_studio_model == True
                 and api_base is not None
                 and isinstance(api_base, str)
                 and not api_base.endswith("/v1/")
@@ -3303,7 +3174,7 @@ class Router:
                 organization = litellm.get_secret(organization_env_name)
                 litellm_params["organization"] = organization
 
-            if custom_llm_provider == "azure" or custom_llm_provider == "azure_text":
+            if "azure" in model_name:
                 if api_base is None or not isinstance(api_base, str):
                     filtered_litellm_params = {
                         k: v
@@ -3916,38 +3787,9 @@ class Router:
                         raise Exception("Model invalid format - {}".format(type(model)))
         return None
 
-    def get_router_model_info(self, deployment: dict) -> ModelMapInfo:
-        """
-        For a given model id, return the model info (max tokens, input cost, output cost, etc.).
-
-        Augment litellm info with additional params set in `model_info`.
-
-        Returns
-        - ModelInfo - If found -> typed dict with max tokens, input cost, etc.
-        """
-        ## SET MODEL NAME
-        base_model = deployment.get("model_info", {}).get("base_model", None)
-        if base_model is None:
-            base_model = deployment.get("litellm_params", {}).get("base_model", None)
-        model = base_model or deployment.get("litellm_params", {}).get("model", None)
-
-        ## GET LITELLM MODEL INFO
-        model_info = litellm.get_model_info(model=model)
-
-        ## CHECK USER SET MODEL INFO
-        user_model_info = deployment.get("model_info", {})
-
-        model_info.update(user_model_info)
-
-        return model_info
-
     def get_model_info(self, id: str) -> Optional[dict]:
         """
         For a given model id, return the model info
-
-        Returns
-        - dict: the model in list with 'model_name', 'litellm_params', Optional['model_info']
-        - None: could not find deployment in list
         """
         for model in self.model_list:
             if "model_info" in model and "id" in model["model_info"]:
@@ -3966,39 +3808,10 @@ class Router:
 
         model_group_info: Optional[ModelGroupInfo] = None
 
-        total_tpm: Optional[int] = None
-        total_rpm: Optional[int] = None
-
         for model in self.model_list:
             if "model_name" in model and model["model_name"] == model_group:
                 # model in model group found #
                 litellm_params = LiteLLM_Params(**model["litellm_params"])
-                # get model tpm
-                _deployment_tpm: Optional[int] = None
-                if _deployment_tpm is None:
-                    _deployment_tpm = model.get("tpm", None)
-                if _deployment_tpm is None:
-                    _deployment_tpm = model.get("litellm_params", {}).get("tpm", None)
-                if _deployment_tpm is None:
-                    _deployment_tpm = model.get("model_info", {}).get("tpm", None)
-
-                if _deployment_tpm is not None:
-                    if total_tpm is None:
-                        total_tpm = 0
-                    total_tpm += _deployment_tpm  # type: ignore
-                # get model rpm
-                _deployment_rpm: Optional[int] = None
-                if _deployment_rpm is None:
-                    _deployment_rpm = model.get("rpm", None)
-                if _deployment_rpm is None:
-                    _deployment_rpm = model.get("litellm_params", {}).get("rpm", None)
-                if _deployment_rpm is None:
-                    _deployment_rpm = model.get("model_info", {}).get("rpm", None)
-
-                if _deployment_rpm is not None:
-                    if total_rpm is None:
-                        total_rpm = 0
-                    total_rpm += _deployment_rpm  # type: ignore
                 # get model info
                 try:
                     model_info = litellm.get_model_info(model=litellm_params.model)
@@ -4112,43 +3925,7 @@ class Router:
                             "supported_openai_params"
                         ]
 
-        ## UPDATE WITH TOTAL TPM/RPM FOR MODEL GROUP
-        if total_tpm is not None and model_group_info is not None:
-            model_group_info.tpm = total_tpm
-
-        if total_rpm is not None and model_group_info is not None:
-            model_group_info.rpm = total_rpm
-
         return model_group_info
-
-    async def get_model_group_usage(self, model_group: str) -> Optional[int]:
-        """
-        Returns remaining tpm quota for model group
-        """
-        dt = get_utc_datetime()
-        current_minute = dt.strftime(
-            "%H-%M"
-        )  # use the same timezone regardless of system clock
-        tpm_keys: List[str] = []
-        for model in self.model_list:
-            if "model_name" in model and model["model_name"] == model_group:
-                tpm_keys.append(
-                    f"global_router:{model['model_info']['id']}:tpm:{current_minute}"
-                )
-
-        ## TPM
-        tpm_usage_list: Optional[List] = await self.cache.async_batch_get_cache(
-            keys=tpm_keys
-        )
-        tpm_usage: Optional[int] = None
-        if tpm_usage_list is not None:
-            for t in tpm_usage_list:
-                if isinstance(t, int):
-                    if tpm_usage is None:
-                        tpm_usage = 0
-                    tpm_usage += t
-
-        return tpm_usage
 
     def get_model_ids(self) -> List[str]:
         """
@@ -4337,7 +4114,6 @@ class Router:
             return _returned_deployments
 
         _context_window_error = False
-        _potential_error_str = ""
         _rate_limit_error = False
 
         ## get model group RPM ##
@@ -4358,7 +4134,7 @@ class Router:
                 model = base_model or deployment.get("litellm_params", {}).get(
                     "model", None
                 )
-                model_info = self.get_router_model_info(deployment=deployment)
+                model_info = litellm.get_model_info(model=model)
 
                 if (
                     isinstance(model_info, dict)
@@ -4370,11 +4146,6 @@ class Router:
                     ):
                         invalid_model_indices.append(idx)
                         _context_window_error = True
-                        _potential_error_str += (
-                            "Model={}, Max Input Tokens={}, Got={}".format(
-                                model, model_info["max_input_tokens"], input_tokens
-                            )
-                        )
                         continue
             except Exception as e:
                 verbose_router_logger.debug("An error occurs - {}".format(str(e)))
@@ -4474,13 +4245,15 @@ class Router:
                 raise ValueError(
                     f"{RouterErrors.no_deployments_available.value}, Try again in {self.cooldown_time} seconds. Passed model={model}. Try again in {self.cooldown_time} seconds."
                 )
-            elif _context_window_error is True:
+            elif _context_window_error == True:
                 raise litellm.ContextWindowExceededError(
-                    message="litellm._pre_call_checks: Context Window exceeded for given call. No models have context window large enough for this call.\n{}".format(
-                        _potential_error_str
-                    ),
+                    message="Context Window exceeded for given call",
                     model=model,
                     llm_provider="",
+                    response=httpx.Response(
+                        status_code=400,
+                        request=httpx.Request("GET", "https://example.com"),
+                    ),
                 )
         if len(invalid_model_indices) > 0:
             for idx in reversed(invalid_model_indices):
@@ -4592,155 +4365,127 @@ class Router:
                 specific_deployment=specific_deployment,
                 request_kwargs=request_kwargs,
             )
-        try:
-            model, healthy_deployments = self._common_checks_available_deployment(
+
+        model, healthy_deployments = self._common_checks_available_deployment(
+            model=model,
+            messages=messages,
+            input=input,
+            specific_deployment=specific_deployment,
+        )  # type: ignore
+
+        if isinstance(healthy_deployments, dict):
+            return healthy_deployments
+
+        # filter out the deployments currently cooling down
+        deployments_to_remove = []
+        # cooldown_deployments is a list of model_id's cooling down, cooldown_deployments = ["16700539-b3cd-42f4-b426-6a12a1bb706a", "16700539-b3cd-42f4-b426-7899"]
+        cooldown_deployments = await self._async_get_cooldown_deployments()
+        verbose_router_logger.debug(
+            f"async cooldown deployments: {cooldown_deployments}"
+        )
+        # Find deployments in model_list whose model_id is cooling down
+        for deployment in healthy_deployments:
+            deployment_id = deployment["model_info"]["id"]
+            if deployment_id in cooldown_deployments:
+                deployments_to_remove.append(deployment)
+        # remove unhealthy deployments from healthy deployments
+        for deployment in deployments_to_remove:
+            healthy_deployments.remove(deployment)
+
+        # filter pre-call checks
+        _allowed_model_region = (
+            request_kwargs.get("allowed_model_region")
+            if request_kwargs is not None
+            else None
+        )
+
+        if self.enable_pre_call_checks and messages is not None:
+            healthy_deployments = self._pre_call_checks(
                 model=model,
+                healthy_deployments=healthy_deployments,
+                messages=messages,
+                request_kwargs=request_kwargs,
+            )
+
+        if len(healthy_deployments) == 0:
+            if _allowed_model_region is None:
+                _allowed_model_region = "n/a"
+            raise ValueError(
+                f"{RouterErrors.no_deployments_available.value}, Try again in {self.cooldown_time} seconds. Passed model={model}. pre-call-checks={self.enable_pre_call_checks}, allowed_model_region={_allowed_model_region}"
+            )
+
+        if (
+            self.routing_strategy == "usage-based-routing-v2"
+            and self.lowesttpm_logger_v2 is not None
+        ):
+            deployment = await self.lowesttpm_logger_v2.async_get_available_deployments(
+                model_group=model,
+                healthy_deployments=healthy_deployments,  # type: ignore
                 messages=messages,
                 input=input,
-                specific_deployment=specific_deployment,
-            )  # type: ignore
-
-            if isinstance(healthy_deployments, dict):
-                return healthy_deployments
-
-            # filter out the deployments currently cooling down
-            deployments_to_remove = []
-            # cooldown_deployments is a list of model_id's cooling down, cooldown_deployments = ["16700539-b3cd-42f4-b426-6a12a1bb706a", "16700539-b3cd-42f4-b426-7899"]
-            cooldown_deployments = await self._async_get_cooldown_deployments()
-            verbose_router_logger.debug(
-                f"async cooldown deployments: {cooldown_deployments}"
             )
-            # Find deployments in model_list whose model_id is cooling down
-            for deployment in healthy_deployments:
-                deployment_id = deployment["model_info"]["id"]
-                if deployment_id in cooldown_deployments:
-                    deployments_to_remove.append(deployment)
-            # remove unhealthy deployments from healthy deployments
-            for deployment in deployments_to_remove:
-                healthy_deployments.remove(deployment)
-
-            # filter pre-call checks
-            _allowed_model_region = (
-                request_kwargs.get("allowed_model_region")
-                if request_kwargs is not None
-                else None
+        if (
+            self.routing_strategy == "cost-based-routing"
+            and self.lowestcost_logger is not None
+        ):
+            deployment = await self.lowestcost_logger.async_get_available_deployments(
+                model_group=model,
+                healthy_deployments=healthy_deployments,  # type: ignore
+                messages=messages,
+                input=input,
             )
-
-            if self.enable_pre_call_checks and messages is not None:
-                healthy_deployments = self._pre_call_checks(
-                    model=model,
-                    healthy_deployments=healthy_deployments,
-                    messages=messages,
-                    request_kwargs=request_kwargs,
-                )
-
-            if len(healthy_deployments) == 0:
-                if _allowed_model_region is None:
-                    _allowed_model_region = "n/a"
-                raise ValueError(
-                    f"{RouterErrors.no_deployments_available.value}, Try again in {self.cooldown_time} seconds. Passed model={model}. pre-call-checks={self.enable_pre_call_checks}, allowed_model_region={_allowed_model_region}"
-                )
-
-            if (
-                self.routing_strategy == "usage-based-routing-v2"
-                and self.lowesttpm_logger_v2 is not None
-            ):
-                deployment = (
-                    await self.lowesttpm_logger_v2.async_get_available_deployments(
-                        model_group=model,
-                        healthy_deployments=healthy_deployments,  # type: ignore
-                        messages=messages,
-                        input=input,
-                    )
-                )
-            if (
-                self.routing_strategy == "cost-based-routing"
-                and self.lowestcost_logger is not None
-            ):
-                deployment = (
-                    await self.lowestcost_logger.async_get_available_deployments(
-                        model_group=model,
-                        healthy_deployments=healthy_deployments,  # type: ignore
-                        messages=messages,
-                        input=input,
-                    )
-                )
-            elif self.routing_strategy == "simple-shuffle":
-                # if users pass rpm or tpm, we do a random weighted pick - based on rpm/tpm
-                ############## Check if we can do a RPM/TPM based weighted pick #################
-                rpm = healthy_deployments[0].get("litellm_params").get("rpm", None)
-                if rpm is not None:
-                    # use weight-random pick if rpms provided
-                    rpms = [
-                        m["litellm_params"].get("rpm", 0) for m in healthy_deployments
-                    ]
-                    verbose_router_logger.debug(f"\nrpms {rpms}")
-                    total_rpm = sum(rpms)
-                    weights = [rpm / total_rpm for rpm in rpms]
-                    verbose_router_logger.debug(f"\n weights {weights}")
-                    # Perform weighted random pick
-                    selected_index = random.choices(range(len(rpms)), weights=weights)[
-                        0
-                    ]
-                    verbose_router_logger.debug(f"\n selected index, {selected_index}")
-                    deployment = healthy_deployments[selected_index]
-                    verbose_router_logger.info(
-                        f"get_available_deployment for model: {model}, Selected deployment: {self.print_deployment(deployment) or deployment[0]} for model: {model}"
-                    )
-                    return deployment or deployment[0]
-                ############## Check if we can do a RPM/TPM based weighted pick #################
-                tpm = healthy_deployments[0].get("litellm_params").get("tpm", None)
-                if tpm is not None:
-                    # use weight-random pick if rpms provided
-                    tpms = [
-                        m["litellm_params"].get("tpm", 0) for m in healthy_deployments
-                    ]
-                    verbose_router_logger.debug(f"\ntpms {tpms}")
-                    total_tpm = sum(tpms)
-                    weights = [tpm / total_tpm for tpm in tpms]
-                    verbose_router_logger.debug(f"\n weights {weights}")
-                    # Perform weighted random pick
-                    selected_index = random.choices(range(len(tpms)), weights=weights)[
-                        0
-                    ]
-                    verbose_router_logger.debug(f"\n selected index, {selected_index}")
-                    deployment = healthy_deployments[selected_index]
-                    verbose_router_logger.info(
-                        f"get_available_deployment for model: {model}, Selected deployment: {self.print_deployment(deployment) or deployment[0]} for model: {model}"
-                    )
-                    return deployment or deployment[0]
-
-                ############## No RPM/TPM passed, we do a random pick #################
-                item = random.choice(healthy_deployments)
-                return item or item[0]
-            if deployment is None:
+        elif self.routing_strategy == "simple-shuffle":
+            # if users pass rpm or tpm, we do a random weighted pick - based on rpm/tpm
+            ############## Check if we can do a RPM/TPM based weighted pick #################
+            rpm = healthy_deployments[0].get("litellm_params").get("rpm", None)
+            if rpm is not None:
+                # use weight-random pick if rpms provided
+                rpms = [m["litellm_params"].get("rpm", 0) for m in healthy_deployments]
+                verbose_router_logger.debug(f"\nrpms {rpms}")
+                total_rpm = sum(rpms)
+                weights = [rpm / total_rpm for rpm in rpms]
+                verbose_router_logger.debug(f"\n weights {weights}")
+                # Perform weighted random pick
+                selected_index = random.choices(range(len(rpms)), weights=weights)[0]
+                verbose_router_logger.debug(f"\n selected index, {selected_index}")
+                deployment = healthy_deployments[selected_index]
                 verbose_router_logger.info(
-                    f"get_available_deployment for model: {model}, No deployment available"
+                    f"get_available_deployment for model: {model}, Selected deployment: {self.print_deployment(deployment) or deployment[0]} for model: {model}"
                 )
-                raise ValueError(
-                    f"{RouterErrors.no_deployments_available.value}, Try again in {self.cooldown_time} seconds. Passed model={model}"
+                return deployment or deployment[0]
+            ############## Check if we can do a RPM/TPM based weighted pick #################
+            tpm = healthy_deployments[0].get("litellm_params").get("tpm", None)
+            if tpm is not None:
+                # use weight-random pick if rpms provided
+                tpms = [m["litellm_params"].get("tpm", 0) for m in healthy_deployments]
+                verbose_router_logger.debug(f"\ntpms {tpms}")
+                total_tpm = sum(tpms)
+                weights = [tpm / total_tpm for tpm in tpms]
+                verbose_router_logger.debug(f"\n weights {weights}")
+                # Perform weighted random pick
+                selected_index = random.choices(range(len(tpms)), weights=weights)[0]
+                verbose_router_logger.debug(f"\n selected index, {selected_index}")
+                deployment = healthy_deployments[selected_index]
+                verbose_router_logger.info(
+                    f"get_available_deployment for model: {model}, Selected deployment: {self.print_deployment(deployment) or deployment[0]} for model: {model}"
                 )
-            verbose_router_logger.info(
-                f"get_available_deployment for model: {model}, Selected deployment: {self.print_deployment(deployment)} for model: {model}"
-            )
+                return deployment or deployment[0]
 
-            return deployment
-        except Exception as e:
-            traceback_exception = traceback.format_exc()
-            # if router rejects call -> log to langfuse/otel/etc.
-            if request_kwargs is not None:
-                logging_obj = request_kwargs.get("litellm_logging_obj", None)
-                if logging_obj is not None:
-                    ## LOGGING
-                    threading.Thread(
-                        target=logging_obj.failure_handler,
-                        args=(e, traceback_exception),
-                    ).start()  # log response
-                    # Handle any exceptions that might occur during streaming
-                    asyncio.create_task(
-                        logging_obj.async_failure_handler(e, traceback_exception)  # type: ignore
-                    )
-            raise e
+            ############## No RPM/TPM passed, we do a random pick #################
+            item = random.choice(healthy_deployments)
+            return item or item[0]
+        if deployment is None:
+            verbose_router_logger.info(
+                f"get_available_deployment for model: {model}, No deployment available"
+            )
+            raise ValueError(
+                f"{RouterErrors.no_deployments_available.value}, Try again in {self.cooldown_time} seconds. Passed model={model}"
+            )
+        verbose_router_logger.info(
+            f"get_available_deployment for model: {model}, Selected deployment: {self.print_deployment(deployment)} for model: {model}"
+        )
+
+        return deployment
 
     def get_available_deployment(
         self,
@@ -5109,7 +4854,7 @@ class Router:
     def reset(self):
         ## clean up on close
         litellm.success_callback = []
-        litellm._async_success_callback = []
+        litellm.__async_success_callback = []
         litellm.failure_callback = []
         litellm._async_failure_callback = []
         self.retry_policy = None

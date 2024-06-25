@@ -1,12 +1,11 @@
-from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Any, Optional, Union
-
+from datetime import datetime
 import litellm
 from litellm.proxy._types import UserAPIKeyAuth
-
-from .integrations.custom_logger import CustomLogger
+from .types.services import ServiceTypes, ServiceLoggerPayload
 from .integrations.prometheus_services import PrometheusServicesLogger
-from .types.services import ServiceLoggerPayload, ServiceTypes
+from .integrations.custom_logger import CustomLogger
+from datetime import timedelta
+from typing import Union, Optional, TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -54,8 +53,8 @@ class ServiceLogging(CustomLogger):
         call_type: str,
         duration: float,
         parent_otel_span: Optional[Span] = None,
-        start_time: Optional[Union[datetime, float]] = None,
-        end_time: Optional[Union[datetime, float]] = None,
+        start_time: Optional[datetime] = None,
+        end_time: Optional[datetime] = None,
     ):
         """
         - For counting if the redis, postgres call is successful
@@ -93,8 +92,8 @@ class ServiceLogging(CustomLogger):
         error: Union[str, Exception],
         call_type: str,
         parent_otel_span: Optional[Span] = None,
-        start_time: Optional[Union[datetime, float]] = None,
-        end_time: Optional[Union[float, datetime]] = None,
+        start_time: Optional[datetime] = None,
+        end_time: Optional[datetime] = None,
     ):
         """
         - For counting if the redis, postgres call is unsuccessful

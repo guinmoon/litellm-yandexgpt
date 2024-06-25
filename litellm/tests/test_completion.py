@@ -1436,43 +1436,6 @@ def test_hf_test_completion_tgi():
 
 # hf_test_completion_tgi()
 
-
-@pytest.mark.parametrize("provider", ["vertex_ai_beta"])  # "vertex_ai",
-@pytest.mark.asyncio
-async def test_openai_compatible_custom_api_base(provider):
-    litellm.set_verbose = True
-    messages = [
-        {
-            "role": "user",
-            "content": "Hello world",
-        }
-    ]
-    from openai import OpenAI
-
-    openai_client = OpenAI(api_key="fake-key")
-
-    with patch.object(
-        openai_client.chat.completions, "create", new=MagicMock()
-    ) as mock_call:
-        try:
-            response = completion(
-                model="openai/my-vllm-model",
-                messages=messages,
-                response_format={"type": "json_object"},
-                client=openai_client,
-                api_base="my-custom-api-base",
-                hello="world",
-            )
-        except Exception as e:
-            pass
-
-        mock_call.assert_called_once()
-
-        print("Call KWARGS - {}".format(mock_call.call_args.kwargs))
-
-        assert "hello" in mock_call.call_args.kwargs["extra_body"]
-
-
 # ################### Hugging Face Conversational models ########################
 # def hf_test_completion_conv():
 #     try:
@@ -2580,8 +2543,6 @@ async def test_completion_replicate_llama3(sync_mode):
         # Add any assertions here to check the response
         assert isinstance(response, litellm.ModelResponse)
         response_format_tests(response=response)
-    except litellm.APIError as e:
-        pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 

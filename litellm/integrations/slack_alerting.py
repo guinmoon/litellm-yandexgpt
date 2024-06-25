@@ -1,35 +1,27 @@
 #### What this does ####
 #    Class for sending Slack Alerts #
-import asyncio
-import datetime
-import os
-import random
-import threading
-import time
-import traceback
-from datetime import datetime as dt
-from datetime import timedelta, timezone
-from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, Set, TypedDict, Union
-
-import aiohttp
-import dotenv
-from openai import APIError
-from pydantic import BaseModel, Field
-
-import litellm
-import litellm.litellm_core_utils
-import litellm.litellm_core_utils.litellm_logging
-import litellm.types
+import dotenv, os, traceback
+from litellm.proxy._types import UserAPIKeyAuth, CallInfo, AlertType
 from litellm._logging import verbose_logger, verbose_proxy_logger
+import litellm, threading
+from typing import List, Literal, Any, Union, Optional, Dict, Set
 from litellm.caching import DualCache
-from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.litellm_logging import Logging
+import asyncio, time
+import aiohttp
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-from litellm.proxy._types import AlertType, CallInfo, UserAPIKeyAuth, WebhookEvent
-from litellm.types.router import LiteLLM_Params
-
+import datetime
+from pydantic import BaseModel, Field
+from enum import Enum
+from datetime import datetime as dt, timedelta, timezone
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.proxy._types import WebhookEvent
+import random
+from typing import TypedDict
+from openai import APIError
 from .email_templates.templates import *
+
+import litellm.types
+from litellm.types.router import LiteLLM_Params
 
 
 class BaseOutageModel(TypedDict):
@@ -230,7 +222,7 @@ class SlackAlerting(CustomLogger):
             "db_exceptions",
         ]
 
-    async def _add_langfuse_trace_id_to_alert(
+    def _add_langfuse_trace_id_to_alert(
         self,
         request_data: Optional[dict] = None,
     ) -> Optional[str]:
@@ -243,23 +235,23 @@ class SlackAlerting(CustomLogger):
         -> litellm_call_id
         """
         # do nothing for now
-        if (
-            request_data is not None
-            and request_data.get("litellm_logging_obj", None) is not None
-        ):
-            trace_id: Optional[str] = None
-            litellm_logging_obj: Logging = request_data["litellm_logging_obj"]
-
-            for _ in range(3):
-                trace_id = litellm_logging_obj._get_trace_id(service_name="langfuse")
-                if trace_id is not None:
-                    break
-                await asyncio.sleep(3)  # wait 3s before retrying for trace id
-
-            if litellm.litellm_core_utils.litellm_logging.langFuseLogger is not None:
-                base_url = (
-                    litellm.litellm_core_utils.litellm_logging.langFuseLogger.Langfuse.base_url
-                )
+        if request_data is not None:
+            trace_id = None
+            if (
+                request_data.get("metadata", {}).get("existing_trace_id", None)
+                is not None
+            ):
+                trace_id = request_data["metadata"]["existing_trace_id"]
+            elif request_data.get("metadata", {}).get("trace_id", None) is not None:
+                trace_id = request_data["metadata"]["trace_id"]
+            elif request_data.get("litellm_logging_obj", None) is not None and hasattr(
+                request_data["litellm_logging_obj"], "model_call_details"
+            ):
+                trace_id = request_data["litellm_logging_obj"].model_call_details[
+                    "litellm_call_id"
+                ]
+            if litellm.utils.langFuseLogger is not None:
+                base_url = litellm.utils.langFuseLogger.Langfuse.base_url
                 return f"{base_url}/trace/{trace_id}"
         return None
 
@@ -644,7 +636,7 @@ class SlackAlerting(CustomLogger):
                 )
 
                 if "langfuse" in litellm.success_callback:
-                    langfuse_url = await self._add_langfuse_trace_id_to_alert(
+                    langfuse_url = self._add_langfuse_trace_id_to_alert(
                         request_data=request_data,
                     )
 
@@ -1239,7 +1231,8 @@ Model Info:
         email_logo_url: Optional[str] = None,
         email_support_contact: Optional[str] = None,
     ):
-        from litellm.proxy.proxy_server import CommonProxyErrors, premium_user
+        from litellm.proxy.proxy_server import premium_user
+        from litellm.proxy.proxy_server import CommonProxyErrors
 
         if premium_user is not True:
             if email_logo_url is not None or email_support_contact is not None:
@@ -1359,8 +1352,8 @@ Model Info:
 
         Returns -> True if sent, False if not.
         """
-        from litellm.proxy.proxy_server import premium_user, prisma_client
         from litellm.proxy.utils import send_email
+        from litellm.proxy.proxy_server import premium_user, prisma_client
 
         email_logo_url = os.getenv(
             "SMTP_SENDER_LOGO", os.getenv("EMAIL_LOGO_URL", None)
@@ -1469,8 +1462,8 @@ Model Info:
         if alert_type not in self.alert_types:
             return
 
-        import json
         from datetime import datetime
+        import json
 
         # Get the current timestamp
         current_time = datetime.now().strftime("%H:%M:%S")

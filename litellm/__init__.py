@@ -37,9 +37,7 @@ input_callback: List[Union[str, Callable]] = []
 success_callback: List[Union[str, Callable]] = []
 failure_callback: List[Union[str, Callable]] = []
 service_callback: List[Union[str, Callable]] = []
-_custom_logger_compatible_callbacks_literal = Literal[
-    "lago", "openmeter", "logfire", "dynamic_rate_limiter"
-]
+_custom_logger_compatible_callbacks_literal = Literal["lago", "openmeter", "logfire"]
 callbacks: List[Union[Callable, _custom_logger_compatible_callbacks_literal]] = []
 _langfuse_default_tags: Optional[
     List[
@@ -576,6 +574,10 @@ petals_models = [
     "petals-team/StableBeluga2",
 ]
 
+yandex_models = [
+    "yandex/yandexgpt-lite",
+]
+
 ollama_models = ["llama2"]
 
 maritalk_models = ["maritalk"]
@@ -604,6 +606,7 @@ model_list = (
     + vertex_language_models
     + watsonx_models
     + gemini_models
+    + yandex_models
 )
 
 provider_list: List = [
@@ -653,6 +656,7 @@ provider_list: List = [
     "triton",
     "predibase",
     "databricks",
+    "yandex",
     "custom",  # custom apis
 ]
 
@@ -680,6 +684,7 @@ models_by_provider: dict = {
     "maritalk": maritalk_models,
     "watsonx": watsonx_models,
     "gemini": gemini_models,
+    "yandex": yandex_models
 }
 
 # mapping for those models which have larger equivalents
@@ -737,7 +742,6 @@ from .utils import (
     client,
     exception_type,
     get_optional_params,
-    get_response_string,
     modify_integration,
     token_counter,
     create_pretrained_tokenizer,
@@ -786,7 +790,7 @@ from .llms.gemini import GeminiConfig
 from .llms.nlp_cloud import NLPCloudConfig
 from .llms.aleph_alpha import AlephAlphaConfig
 from .llms.petals import PetalsConfig
-from .llms.vertex_httpx import VertexGeminiConfig, GoogleAIStudioGeminiConfig
+from .llms.vertex_httpx import VertexGeminiConfig
 from .llms.vertex_ai import VertexAIConfig, VertexAITextEmbeddingConfig
 from .llms.vertex_ai_anthropic import VertexAIAnthropicConfig
 from .llms.sagemaker import SagemakerConfig

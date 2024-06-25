@@ -12,7 +12,6 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .completion import CompletionRequest
 from .embedding import EmbeddingRequest
-from .utils import ModelResponse
 
 
 class ModelConfig(BaseModel):
@@ -316,7 +315,7 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     input_cost_per_second: Optional[float]
     output_cost_per_second: Optional[float]
     ## MOCK RESPONSES ##
-    mock_response: Optional[Union[str, ModelResponse, Exception]]
+    mock_response: Optional[str]
 
 
 class DeploymentTypedDict(TypedDict):
@@ -443,8 +442,6 @@ class ModelGroupInfo(BaseModel):
             "chat", "embedding", "completion", "image_generation", "audio_transcription"
         ]
     ] = Field(default="chat")
-    tpm: Optional[int] = None
-    rpm: Optional[int] = None
     supports_parallel_function_calling: bool = Field(default=False)
     supports_vision: bool = Field(default=False)
     supports_function_calling: bool = Field(default=False)

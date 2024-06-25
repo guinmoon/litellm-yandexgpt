@@ -70,31 +70,6 @@ def test_router_specific_model_via_id():
     router.completion(model="1234", messages=[{"role": "user", "content": "Hey!"}])
 
 
-def test_router_azure_ai_client_init():
-
-    _deployment = {
-        "model_name": "meta-llama-3-70b",
-        "litellm_params": {
-            "model": "azure_ai/Meta-Llama-3-70B-instruct",
-            "api_base": "my-fake-route",
-            "api_key": "my-fake-key",
-        },
-        "model_info": {"id": "1234"},
-    }
-    router = Router(model_list=[_deployment])
-
-    _client = router._get_client(
-        deployment=_deployment,
-        client_type="async",
-        kwargs={"stream": False},
-    )
-    print(_client)
-    from openai import AsyncAzureOpenAI, AsyncOpenAI
-
-    assert isinstance(_client, AsyncOpenAI)
-    assert not isinstance(_client, AsyncAzureOpenAI)
-
-
 def test_router_sensitive_keys():
     try:
         router = Router(
@@ -732,7 +707,7 @@ def test_router_rpm_pre_call_check():
         pytest.fail(f"Got unexpected exception on router! - {str(e)}")
 
 
-def test_router_context_window_check_pre_call_check_in_group_custom_model_info():
+def test_router_context_window_check_pre_call_check_in_group():
     """
     - Give a gpt-3.5-turbo model group with different context windows (4k vs. 16k)
     - Send a 5k prompt
@@ -755,61 +730,6 @@ def test_router_context_window_check_pre_call_check_in_group_custom_model_info()
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),
                     "base_model": "azure/gpt-35-turbo",
-                    "mock_response": "Hello world 1!",
-                },
-                "model_info": {"max_input_tokens": 100},
-            },
-            {
-                "model_name": "gpt-3.5-turbo",  # openai model name
-                "litellm_params": {  # params for litellm completion/embedding call
-                    "model": "gpt-3.5-turbo-1106",
-                    "api_key": os.getenv("OPENAI_API_KEY"),
-                    "mock_response": "Hello world 2!",
-                },
-                "model_info": {"max_input_tokens": 0},
-            },
-        ]
-
-        router = Router(model_list=model_list, set_verbose=True, enable_pre_call_checks=True, num_retries=0)  # type: ignore
-
-        response = router.completion(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "user", "content": "Who was Alexander?"},
-            ],
-        )
-
-        print(f"response: {response}")
-
-        assert response.choices[0].message.content == "Hello world 1!"
-    except Exception as e:
-        pytest.fail(f"Got unexpected exception on router! - {str(e)}")
-
-
-def test_router_context_window_check_pre_call_check():
-    """
-    - Give a gpt-3.5-turbo model group with different context windows (4k vs. 16k)
-    - Send a 5k prompt
-    - Assert it works
-    """
-    import os
-
-    from large_text import text
-
-    litellm.set_verbose = False
-
-    print(f"len(text): {len(text)}")
-    try:
-        model_list = [
-            {
-                "model_name": "gpt-3.5-turbo",  # openai model name
-                "litellm_params": {  # params for litellm completion/embedding call
-                    "model": "azure/chatgpt-v-2",
-                    "api_key": os.getenv("AZURE_API_KEY"),
-                    "api_version": os.getenv("AZURE_API_VERSION"),
-                    "api_base": os.getenv("AZURE_API_BASE"),
-                    "base_model": "azure/gpt-35-turbo",
-                    "mock_response": "Hello world 1!",
                 },
             },
             {
@@ -817,7 +737,6 @@ def test_router_context_window_check_pre_call_check():
                 "litellm_params": {  # params for litellm completion/embedding call
                     "model": "gpt-3.5-turbo-1106",
                     "api_key": os.getenv("OPENAI_API_KEY"),
-                    "mock_response": "Hello world 2!",
                 },
             },
         ]
@@ -833,8 +752,6 @@ def test_router_context_window_check_pre_call_check():
         )
 
         print(f"response: {response}")
-
-        assert response.choices[0].message.content == "Hello world 2!"
     except Exception as e:
         pytest.fail(f"Got unexpected exception on router! - {str(e)}")
 
@@ -1788,99 +1705,3 @@ async def test_router_text_completion_client():
         print(responses)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-
-
-@pytest.fixture
-def mock_response() -> litellm.ModelResponse:
-    return litellm.ModelResponse(
-        **{
-            "id": "chatcmpl-abc123",
-            "object": "chat.completion",
-            "created": 1699896916,
-            "model": "gpt-3.5-turbo-0125",
-            "choices": [
-                {
-                    "index": 0,
-                    "message": {
-                        "role": "assistant",
-                        "content": None,
-                        "tool_calls": [
-                            {
-                                "id": "call_abc123",
-                                "type": "function",
-                                "function": {
-                                    "name": "get_current_weather",
-                                    "arguments": '{\n"location": "Boston, MA"\n}',
-                                },
-                            }
-                        ],
-                    },
-                    "logprobs": None,
-                    "finish_reason": "tool_calls",
-                }
-            ],
-            "usage": {"prompt_tokens": 5, "completion_tokens": 5, "total_tokens": 10},
-        }
-    )
-
-
-@pytest.mark.asyncio
-async def test_router_model_usage(mock_response):
-    """
-    Test if tracking used model tpm works as expected
-    """
-    model = "my-fake-model"
-    model_tpm = 100
-    setattr(
-        mock_response,
-        "usage",
-        litellm.Usage(prompt_tokens=5, completion_tokens=5, total_tokens=10),
-    )
-
-    print(f"mock_response: {mock_response}")
-    model_tpm = 100
-    llm_router = Router(
-        model_list=[
-            {
-                "model_name": model,
-                "litellm_params": {
-                    "model": "gpt-3.5-turbo",
-                    "api_key": "my-key",
-                    "api_base": "my-base",
-                    "tpm": model_tpm,
-                    "mock_response": mock_response,
-                },
-            }
-        ]
-    )
-
-    allowed_fails = 1  # allow for changing b/w minutes
-
-    for _ in range(2):
-        try:
-            _ = await llm_router.acompletion(
-                model=model, messages=[{"role": "user", "content": "Hey!"}]
-            )
-            await asyncio.sleep(3)
-
-            initial_usage = await llm_router.get_model_group_usage(model_group=model)
-
-            # completion call - 10 tokens
-            _ = await llm_router.acompletion(
-                model=model, messages=[{"role": "user", "content": "Hey!"}]
-            )
-
-            await asyncio.sleep(3)
-            updated_usage = await llm_router.get_model_group_usage(model_group=model)
-
-            assert updated_usage == initial_usage + 10  # type: ignore
-            break
-        except Exception as e:
-            if allowed_fails > 0:
-                print(
-                    f"Decrementing allowed_fails: {allowed_fails}.\nReceived error - {str(e)}"
-                )
-                allowed_fails -= 1
-            else:
-                print(f"allowed_fails: {allowed_fails}")
-                raise e
